@@ -82,4 +82,16 @@ class AuthMiddleware {
 
         return ['success' => false, 'message' => 'Invalid credentials'];
     }
+
+    public function requireRole($required_role) {
+        $user = $this->authenticate();
+        
+        if ($user->role !== $required_role && $user->role !== 'admin') {
+            http_response_code(403);
+            echo json_encode(['error' => 'Insufficient permissions']);
+            exit();
+        }
+        
+        return $user;
+    }
 }

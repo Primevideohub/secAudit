@@ -1,9 +1,13 @@
 <?php
+require_once __DIR__ . '/../services/RealTimeService.php';
+
 class ReportController {
     private $db;
+    private $realTimeService;
 
     public function __construct($db) {
         $this->db = $db;
+        $this->realTimeService = new RealTimeService();
     }
 
     public function getAll() {
@@ -112,7 +116,7 @@ class ReportController {
                 $report_id = $this->db->lastInsertId();
                 
                 // Log activity
-                $this->logActivity('create', 'report', $report_id, 'Created new report: ' . $data['title']);
+                $this->realTimeService->logActivity(null, 'create', 'report', $report_id, 'Created new report: ' . $data['title']);
                 
                 $this->getById($report_id);
             } else {
@@ -163,7 +167,7 @@ class ReportController {
                 $report_id = $this->db->lastInsertId();
                 
                 // Log activity
-                $this->logActivity('generate', 'report', $report_id, 'Generated report: ' . $title);
+                $this->realTimeService->logActivity(null, 'generate', 'report', $report_id, 'Generated report: ' . $title);
                 
                 http_response_code(201);
                 echo json_encode([
@@ -237,7 +241,7 @@ class ReportController {
                 // unlink($report['file_path']);
                 
                 // Log activity
-                $this->logActivity('delete', 'report', $id, 'Deleted report: ' . $report['title']);
+                $this->realTimeService->logActivity(null, 'delete', 'report', $id, 'Deleted report: ' . $report['title']);
                 
                 http_response_code(200);
                 echo json_encode(['success' => true, 'message' => 'Report deleted successfully']);
@@ -269,22 +273,59 @@ class ReportController {
 
     private function generateAuditSummary($params) {
         // Generate audit summary data
-        return ['type' => 'audit_summary', 'data' => 'Sample audit summary data'];
+        $query = "SELECT COUNT(*) as total_audits, 
+                         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_audits,
+                         SUM(CASE WHEN status = 'in_progress' THEN 1 ELSE 0 END) as active_audits
+                  FROM audits";
+        $stmt = $this->db->prepare($query);
+        $stmt->execute();
+        $audit_stats = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        return ['type' => 'audit_summary', 'data' => $audit_stats];
     }
 
     private function generateVulnerabilityReport($params) {
         // Generate vulnerability report data
-        return ['type' => 'vulnerability_report', 'data' => 'Sample vulnerability report data'];
+        $query = "SELECT severity, COUNT(*) as count 
+                  FROM vulnerabilities 
+                  WHERE status IN ('open', 'in_progress')
+                  GROUP BY severity";
+        $stmt = $this->db->prepare($query);
+        $stmt->execute();
+        $vuln_stats = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        return ['type' => 'vulnerability_report', 'data' => $vuln_stats];
     }
 
     private function generateComplianceReport($params) {
         // Generate compliance report data
-        return ['type' => 'compliance_report', 'data' => 'Sample compliance report data'];
+        $total_vulns_query = "SELECT COUNT(*) as total FROM vulnerabilities";
+        $total_stmt = $this->db->prepare($total_vulns_query);
+        $total_stmt->execute();
+        $total_vulns = $total_stmt->fetch(PDO::FETCH_ASSOC)['total'];
+        
+        $resolved_vulns_query = "SELECT COUNT(*) as resolved FROM vulnerabilities WHERE status = 'resolved'";
+        $resolved_stmt = $this->db->prepare($resolved_vulns_query);
+        $resolved_stmt->execute();
+        $resolved_vulns = $resolved_stmt->fetch(PDO::FETCH_ASSOC)['resolved'];
+        
+        $compliance_score = $total_vulns > 0 ? round(($resolved_vulns / $total_vulns) * 100) : 100;
+        
+        return ['type' => 'compliance_report', 'data' => ['score' => $compliance_score, 'total' => $total_vulns, 'resolved' => $resolved_vulns]];
     }
 
     private function generateExecutiveSummary($params) {
         // Generate executive summary data
-        return ['type' => 'executive_summary', 'data' => 'Sample executive summary data'];
+        $metrics_query = "SELECT 
+                            (SELECT COUNT(*) FROM assets WHERE status = 'active') as total_assets,
+                            (SELECT COUNT(*) FROM audits WHERE status IN ('scheduled', 'in_progress')) as active_audits,
+                            (SELECT COUNT(*) FROM vulnerabilities WHERE status IN ('open', 'in_progress')) as open_vulns,
+                            (SELECT COUNT(*) FROM vulnerabilities WHERE severity = 'critical' AND status IN ('open', 'in_progress')) as critical_vulns";
+        $stmt = $this->db->prepare($metrics_query);
+        $stmt->execute();
+        $metrics = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        return ['type' => 'executive_summary', 'data' => $metrics];
     }
 
     private function getReportTitle($type, $params) {
@@ -307,23 +348,5 @@ class ReportController {
     private function calculateFileSize($data) {
         // Simulate file size calculation
         return rand(1, 5) . '.' . rand(0, 9) . ' MB';
-    }
-
-    private function logActivity($action, $entity_type, $entity_id, $details) {
-        try {
-            $query = "INSERT INTO activity_logs (action, entity_type, entity_id, details, ip_address, user_agent) 
-                      VALUES (:action, :entity_type, :entity_id, :details, :ip_address, :user_agent)";
-            
-            $stmt = $this->db->prepare($query);
-            $stmt->bindParam(':action', $action);
-            $stmt->bindParam(':entity_type', $entity_type);
-            $stmt->bindParam(':entity_id', $entity_id);
-            $stmt->bindParam(':details', $details);
-            $stmt->bindParam(':ip_address', $_SERVER['REMOTE_ADDR'] ?? null);
-            $stmt->bindParam(':user_agent', $_SERVER['HTTP_USER_AGENT'] ?? null);
-            $stmt->execute();
-        } catch (Exception $e) {
-            error_log("Failed to log activity: " . $e->getMessage());
-        }
     }
 }

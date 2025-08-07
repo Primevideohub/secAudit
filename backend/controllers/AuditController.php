@@ -1,9 +1,13 @@
 <?php
+require_once __DIR__ . '/../services/RealTimeService.php';
+
 class AuditController {
     private $db;
+    private $realTimeService;
 
     public function __construct($db) {
         $this->db = $db;
+        $this->realTimeService = new RealTimeService();
     }
 
     public function getAll() {
@@ -152,8 +156,10 @@ class AuditController {
                 
                 $this->db->commit();
                 
-                // Log activity
-                $this->logActivity('create', 'audit', $audit_id, 'Created new audit: ' . $data['title']);
+                // Log activity and broadcast updates
+                $this->realTimeService->logActivity(null, 'create', 'audit', $audit_id, 'Created new audit: ' . $data['title']);
+                $this->realTimeService->broadcastAuditUpdate($audit_id, 'created');
+                $this->realTimeService->broadcastMetricsUpdate();
                 
                 $this->getById($audit_id);
             } else {
@@ -237,8 +243,10 @@ class AuditController {
             
             $this->db->commit();
             
-            // Log activity
-            $this->logActivity('update', 'audit', $id, 'Updated audit');
+            // Log activity and broadcast updates
+            $this->realTimeService->logActivity(null, 'update', 'audit', $id, 'Updated audit');
+            $this->realTimeService->broadcastAuditUpdate($id, 'updated');
+            $this->realTimeService->broadcastMetricsUpdate();
             
             $this->getById($id);
         } catch (Exception $e) {
@@ -266,8 +274,7 @@ class AuditController {
             
             $this->db->beginTransaction();
             
-            // Delete audit-asset relationships (will be handled by foreign key cascade)
-            // Delete the audit
+            // Delete the audit (cascade will handle relationships)
             $query = "DELETE FROM audits WHERE id = :id";
             $stmt = $this->db->prepare($query);
             $stmt->bindParam(':id', $id);
@@ -275,8 +282,10 @@ class AuditController {
             if ($stmt->execute()) {
                 $this->db->commit();
                 
-                // Log activity
-                $this->logActivity('delete', 'audit', $id, 'Deleted audit: ' . $audit_title);
+                // Log activity and broadcast updates
+                $this->realTimeService->logActivity(null, 'delete', 'audit', $id, 'Deleted audit: ' . $audit_title);
+                $this->realTimeService->broadcastAuditUpdate($id, 'deleted');
+                $this->realTimeService->broadcastMetricsUpdate();
                 
                 http_response_code(200);
                 echo json_encode(['success' => true, 'message' => 'Audit deleted successfully']);
@@ -305,8 +314,9 @@ class AuditController {
             $stmt->bindParam(':id', $id);
             
             if ($stmt->execute() && $stmt->rowCount() > 0) {
-                // Log activity
-                $this->logActivity('start', 'audit', $id, 'Started audit');
+                // Log activity and broadcast updates
+                $this->realTimeService->logActivity(null, 'start', 'audit', $id, 'Started audit');
+                $this->realTimeService->broadcastAuditUpdate($id, 'started');
                 
                 http_response_code(200);
                 echo json_encode(['success' => true, 'message' => 'Audit started successfully']);
@@ -333,8 +343,10 @@ class AuditController {
             $stmt->bindParam(':id', $id);
             
             if ($stmt->execute() && $stmt->rowCount() > 0) {
-                // Log activity
-                $this->logActivity('complete', 'audit', $id, 'Completed audit');
+                // Log activity and broadcast updates
+                $this->realTimeService->logActivity(null, 'complete', 'audit', $id, 'Completed audit');
+                $this->realTimeService->broadcastAuditUpdate($id, 'completed');
+                $this->realTimeService->broadcastMetricsUpdate();
                 
                 http_response_code(200);
                 echo json_encode(['success' => true, 'message' => 'Audit completed successfully']);
@@ -345,24 +357,6 @@ class AuditController {
         } catch (Exception $e) {
             http_response_code(500);
             echo json_encode(['error' => 'Failed to complete audit: ' . $e->getMessage()]);
-        }
-    }
-
-    private function logActivity($action, $entity_type, $entity_id, $details) {
-        try {
-            $query = "INSERT INTO activity_logs (action, entity_type, entity_id, details, ip_address, user_agent) 
-                      VALUES (:action, :entity_type, :entity_id, :details, :ip_address, :user_agent)";
-            
-            $stmt = $this->db->prepare($query);
-            $stmt->bindParam(':action', $action);
-            $stmt->bindParam(':entity_type', $entity_type);
-            $stmt->bindParam(':entity_id', $entity_id);
-            $stmt->bindParam(':details', $details);
-            $stmt->bindParam(':ip_address', $_SERVER['REMOTE_ADDR'] ?? null);
-            $stmt->bindParam(':user_agent', $_SERVER['HTTP_USER_AGENT'] ?? null);
-            $stmt->execute();
-        } catch (Exception $e) {
-            error_log("Failed to log activity: " . $e->getMessage());
         }
     }
 }
